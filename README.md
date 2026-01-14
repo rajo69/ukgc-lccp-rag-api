@@ -10,42 +10,57 @@
 
 ## 📖 Project Overview
 
-This project is a high-performance **Retrieval-Augmented Generation (RAG)** API designed to assist compliance officers and stakeholders in navigating the **UK Gambling Commission's Licence Conditions and Codes of Practice (LCCP)**.
+This project is a high-performance **Retrieval-Augmented Generation (RAG)** API designed to assist compliance officers, legal teams, and stakeholders in navigating the **UK Gambling Commission's Licence Conditions and Codes of Practice (LCCP)**.
 
-Traditional keyword search fails with complex regulations. This application uses **Semantic Search** to understand the *intent* behind a question (e.g., "marketing rules") and retrieves the specific legal conditions, citing sources accurately.
+Regulatory documents are dense, hierarchical, and difficult to search using traditional keyword methods. This application employs **Semantic Search** to understand the *intent* behind a query (e.g., "rules for preventing money laundering") and retrieves precise legal conditions, answering with strict grounding to the source text.
+
+## 🔄 End-to-End Pipeline
+
+This system was built from scratch, moving from raw unstructured data to a production-grade API.
+
+### 1. Data Engineering & Ingestion
+*   **Source:** The raw HTML single-page view of the LCCP.
+*   **Parsing Strategy:** Built a custom extraction script using `BeautifulSoup4`.
+*   **Hierarchy Preservation:** The script detects the document structure (Part → Section → Subsection → Condition) and injects this context into every chunk.
+*   **HTML to Markdown:** Converted HTML list structures (`<ul>`, `<ol>`) into Markdown to ensure the LLM correctly interprets numbered regulations.
+
+### 2. Indexing & Embeddings
+*   **Vectorization:** Utilized **NVIDIA's `nv-embedqa-e5-v5`** model, which is optimized for retrieval tasks, to convert text chunks into high-dimensional vectors.
+*   **Storage:** Persisted the vector index locally to ensure <50ms retrieval times and eliminate re-indexing costs upon server restarts.
+
+### 3. RAG Logic & Inference
+*   **Orchestration:** Used **LlamaIndex** to manage the retrieval and query lifecycle.
+*   **LLM:** Powered by **Meta Llama 3.3 70B Instruct** (via NVIDIA NIM) for high-accuracy reasoning and adherence to complex instructions.
+*   **Prompt Engineering:** Implemented a strict system prompt to prevent hallucination, forcing the model to answer *only* using retrieved context and to cite specific Regulation IDs.
+
+### 4. Deployment
+*   **API Layer:** Wrapped the logic in an asynchronous **FastAPI** application.
+*   **Hosting:** Containerized and deployed on **Render**.
 
 ## 🚀 Key Features
 
-*   **Semantic Search:** Retrieval of relevant regulations using **NVIDIA's nv-embedqa-e5-v5** model.
-*   **Accurate Citations:** Every response includes specific LCCP codes (e.g., *Licence Condition 12.1.1*) and links to the source text.
-*   **High-Speed Inference:** Powered by **Meta Llama 3.1 8B** via NVIDIA NIM for sub-second text generation.
-*   **Asynchronous Architecture:** Built with **FastAPI** using `async/await` to handle concurrent user requests efficiently.
-*   **Custom Ingestion Pipeline:** Python scripts to scrape, clean, and chunk the LCCP HTML documents into a vector-ready dataset.
+*   **Semantic Understanding:** Finds relevant regulations even if the user uses synonyms (e.g., "under 18s" finds "protection of children").
+*   **Grounded Citations:** Every response includes the specific LCCP code (e.g., *Licence Condition 12.1.1*) and a direct link to the legislation.
+*   **Asynchronous Architecture:** Built using Python's `async/await` pattern to handle concurrent requests without blocking the server during LLM inference.
+
+## 🧠 Challenges & Learnings
+
+### Challenge 1: Loss of Structural Context
+**The Problem:** Standard text extraction flattened HTML lists. For example, a regulation stating "You must do: a) X, b) Y, c) Z" was read by the LLM as a single unstructured sentence, leading to poor answers when users asked for "lists of requirements."
+**The Solution:** I integrated `markdownify` into the ingestion pipeline. By converting HTML to Markdown before embedding, the bullet points and numbered lists were preserved. This significantly improved the model's ability to extract specific list items.
+
+### Challenge 2: Model Size vs. Accuracy
+**The Problem:** Initial tests using smaller 1B parameter models resulted in "hallucinations" and an inability to follow strict formatting instructions.
+**The Solution:** I migrated to **Llama 3.3 70B** via NVIDIA NIM. This provided the reasoning capabilities of a frontier model (like GPT-4) necessary for legal text interpretation, while the serverless NVIDIA infrastructure kept inference speed under 2 seconds.
 
 ## 🛠️ Tech Stack
 
-*   **Backend Framework:** FastAPI (Python)
-*   **Orchestration:** LlamaIndex
-*   **LLM & Embeddings:** NVIDIA NIM (Serverless Inference)
-*   **Vector Storage:** Local VectorStore (Persisted on disk for fast cold-starts)
-*   **Deployment:** Render (Cloud Hosting)
-
-## 🏗️ Architecture
-
-1.  **Ingestion:** Raw HTML LCCP data is parsed, cleaned, and chunked by Regulation ID.
-2.  **Embedding:** Text chunks are converted to vectors using `nvidia/nv-embedqa-e5-v5`.
-3.  **Indexing:** Vectors are stored in a persistent local index (`/storage`).
-4.  **Querying:**
-    *   User sends a natural language query via API.
-    *   System retrieves the **Top-3** most relevant chunks.
-    *   LLM generates a strict answer based *only* on the retrieved context.
-
-## ⚡ Performance Optimizations
-
-To ensure a responsive user experience on a cloud free-tier environment:
-*   **Reduced Top-K:** Optimized retrieval to fetch only the top 3 chunks, reducing LLM token load and latency.
-*   **Pre-built Index:** The vector index is built once and deployed as a static asset, eliminating the need for expensive re-indexing on server startup.
-*   **Async/Await:** Fully asynchronous endpoints prevent blocking during network calls to the AI inference engine.
+*   **Language:** Python 3.10+
+*   **API Framework:** FastAPI
+*   **RAG Framework:** LlamaIndex
+*   **LLM Provider:** NVIDIA NIM (Serverless)
+*   **Data Processing:** BeautifulSoup4, Markdownify
+*   **Cloud Platform:** Render
 
 ## 💻 Local Installation
 
@@ -79,7 +94,7 @@ To run this API locally:
 
 5.  **Run the Server**
     ```bash
-    python main.py
+    uvicorn main:app --reload
     ```
     Access the documentation at `http://127.0.0.1:8000/docs`.
 
@@ -90,5 +105,23 @@ To run this API locally:
 **Request:**
 ```json
 {
-  "question": "What are the rules regarding self-exclusion?"
+  "question": "What are the rules regarding financial vulnerability checks?"
 }
+```
+
+**Response:**
+```json
+{
+  "answer": "According to SR Code 3.4.4, licensees must undertake a financial vulnerability check...",
+  "sources": [
+    {
+      "regulation": "SR Code 3.4.4",
+      "type": "Social Responsibility Code",
+      "link": "https://www.legislation.gov.uk/..."
+    }
+  ]
+}
+```
+
+---
+*Created by Rajarshi Nandi*
